@@ -1,25 +1,27 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Horloges équipe</title>
-<meta name="description" content="Heure en direct de chaque membre de l'équipe, à intégrer dans Notion via un bloc /embed.">
+<title>Team clocks</title>
+<meta name="description" content="Live local time of every team member, to embed in Notion with an /embed block.">
 <!--
   ─────────────────────────────────────────────────────────────
   HORLOGES ÉQUIPE — page à embarquer dans Notion (/embed + URL)
   ─────────────────────────────────────────────────────────────
   À modifier : uniquement le bloc TEAM ci-dessous (un objet par personne).
     name     : prénom
-    country  : pays affiché sous le prénom
+    country  : pays affiché sous le prénom (en anglais)
     tz       : fuseau IANA, ex. "Europe/Paris", "America/Los_Angeles", "Asia/Makassar"
                (liste : https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
     hours    : [début, fin] des horaires de dispo, en heures locales (optionnel, défaut 9 → 18)
     days     : jours travaillés, 1 = lundi … 7 = dimanche (optionnel, défaut lun → ven)
 
-  Paramètres d'URL (optionnels) :
+  Les cartes sont triées par heure locale croissante (de l'ouest vers l'est), re-triées
+  automatiquement si un changement d'heure modifie l'ordre. Textes affichés en anglais.
+
+  Paramètre d'URL (optionnel) :
     ?cols=3          → force 3 colonnes
-    ?sort=offset     → trie de l'ouest vers l'est
 -->
 <style>
   :root {
@@ -94,12 +96,12 @@
 <script>
   // ───────────── ÉQUIPE ─────────────
   const TEAM = [
-    { name: "Lucas",   country: "États-Unis", tz: "America/Los_Angeles" },
-    { name: "Nathan",  country: "Bali",       tz: "Asia/Makassar" },
-    { name: "Justine", country: "France",     tz: "Europe/Paris" },
-    { name: "Illan",   country: "France",     tz: "Europe/Paris" },
-    { name: "Pedro",   country: "Brésil",     tz: "America/Sao_Paulo" },
-    { name: "Johanna", country: "Roumanie",   tz: "Europe/Bucharest" },
+    { name: "Lucas",   country: "United States", tz: "America/Los_Angeles" },
+    { name: "Nathan",  country: "Bali",          tz: "Asia/Makassar" },
+    { name: "Justine", country: "France",        tz: "Europe/Paris" },
+    { name: "Illan",   country: "France",        tz: "Europe/Paris" },
+    { name: "Pedro",   country: "Brazil",        tz: "America/Sao_Paulo" },
+    { name: "Johanna", country: "Romania",       tz: "Europe/Bucharest" },
   ];
   const DEFAULT_HOURS = [9, 18];
   const DEFAULT_DAYS = [1, 2, 3, 4, 5];
@@ -120,7 +122,7 @@
           year: "numeric", month: "2-digit", day: "2-digit",
           hour: "2-digit", minute: "2-digit", second: "2-digit", weekday: "short",
         }),
-        date: new Intl.DateTimeFormat("fr-FR", { timeZone: tz, weekday: "long", day: "numeric", month: "long" }),
+        date: new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "long", day: "numeric", month: "long" }),
       });
     }
     return fmtCache.get(tz);
@@ -142,10 +144,9 @@
 
   function diffLabel(memberOffset, viewerOffset) {
     const d = memberOffset - viewerOffset;
-    if (d === 0) return "Même heure que toi";
-    const sign = d > 0 ? "+" : "−";
+    if (d === 0) return "Same time as you";
     const h = Math.floor(Math.abs(d) / 60), m = Math.abs(d) % 60;
-    return `${sign}${h}h${m ? pad(m) : ""} par rapport à toi`;
+    return `${h}h${m ? pad(m) : ""} ${d > 0 ? "ahead of" : "behind"} you`;
   }
 
   function status(m, lp) {
@@ -153,21 +154,13 @@
     const [start, end] = m.hours || DEFAULT_HOURS;
     const t = lp.hour + lp.minute / 60;
     const inHours = start < end ? (t >= start && t < end) : (t >= start || t < end);
-    if (!days.includes(lp.weekday)) return { cls: "off", label: "Week-end" };
-    if (inHours) return { cls: "ok", label: "Disponible" };
-    return { cls: "off", label: "Hors horaires" };
+    if (!days.includes(lp.weekday)) return { cls: "off", label: "Weekend" };
+    if (inHours) return { cls: "ok", label: "Available" };
+    return { cls: "off", label: "Off hours" };
   }
 
-  function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
-  // Construction des cartes (une fois), puis mise à jour des valeurs chaque seconde
-  let members = TEAM.slice();
-  if (params.get("sort") === "offset") {
-    const now = new Date();
-    members.sort((a, b) => localParts(now, a.tz).offsetMin - localParts(now, b.tz).offsetMin);
-  }
-
-  const cards = members.map(m => {
+  // Construction des cartes (une fois), puis mise à jour des valeurs chaque minute
+  const cards = TEAM.map(m => {
     const card = document.createElement("article");
     card.className = "card";
     card.innerHTML = `
@@ -177,27 +170,39 @@
       <span class="pill"></span>`;
     card.querySelector(".name").textContent = m.name;
     card.querySelector(".country").textContent = m.country;
-    grid.appendChild(card);
     return {
-      m,
+      m, card,
       hm: card.querySelector(".hm"), sky: card.querySelector(".sky"),
       date: card.querySelector(".date"), diff: card.querySelector(".diff"), pill: card.querySelector(".pill"),
     };
   });
+
+  // Ordre chronologique : heure locale croissante (ouest → est). Stable : à décalage égal, ordre de TEAM.
+  let currentOrder = "";
+  function sortCards() {
+    const sorted = cards.slice().sort((a, b) => a.offsetMin - b.offsetMin);
+    const key = sorted.map(c => c.m.name).join("|");
+    if (key !== currentOrder) {
+      currentOrder = key;
+      for (const c of sorted) grid.appendChild(c.card);
+    }
+  }
 
   function tick() {
     const now = new Date();
     const viewerOffset = -now.getTimezoneOffset();
     for (const c of cards) {
       const lp = localParts(now, c.m.tz);
+      c.offsetMin = lp.offsetMin;
       c.hm.textContent = `${pad(lp.hour)}:${pad(lp.minute)}`;
       c.sky.textContent = (lp.hour >= 7 && lp.hour < 20) ? "☀️" : "🌙";
-      c.date.textContent = capitalize(fmt(c.m.tz).date.format(now));
+      c.date.textContent = fmt(c.m.tz).date.format(now);
       c.diff.textContent = diffLabel(lp.offsetMin, viewerOffset);
       const s = status(c.m, lp);
       c.pill.className = `pill ${s.cls}`;
       c.pill.textContent = s.label;
     }
+    sortCards();
   }
 
   tick();
